@@ -38,20 +38,7 @@ class AnalysisResult(BaseModel):
     suggestions: list[str]
     strengths: list[str]
 
-_nlp = None
 _model = None
-
-def get_nlp():
-    global _nlp
-    if _nlp is None:
-        import spacy
-        try:
-            _nlp = spacy.load("en_core_web_sm")
-        except OSError:
-            import subprocess
-            subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"], check=True)
-            _nlp = spacy.load("en_core_web_sm")
-    return _nlp
 
 def get_model():
     global _model
@@ -69,25 +56,20 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
-        if text.strip():
-            print(f"pdfplumber extracted {len(text)} characters")
-            return text.strip()
-        raise Exception("pdfplumber returned empty text")
+        if not text.strip():
+            raise Exception("pdfplumber got empty text")
     except Exception as e:
         print(f"pdfplumber failed: {e}, trying PyPDF2...")
-    try:
-        import PyPDF2
-        reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
-        if text.strip():
-            print(f"PyPDF2 extracted {len(text)} characters")
-            return text.strip()
-    except Exception as e:
-        print(f"PyPDF2 also failed: {e}")
-    return ""
+        try:
+            import PyPDF2
+            reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+        except Exception as e2:
+            print(f"PyPDF2 also failed: {e2}")
+    return text.strip()
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
     from docx import Document
@@ -123,12 +105,12 @@ def extract_phone(text: str) -> str:
     return match.group(0).strip() if match else ""
 
 def extract_name(text: str) -> str:
-    nlp = get_nlp()
-    doc = nlp(text[:300])
-    for ent in doc.ents:
-        if ent.label_ == "PERSON":
-            return ent.text
     lines = [l.strip() for l in text.split("\n") if l.strip()]
+    for line in lines[:5]:
+        if (len(line.split()) <= 5 and
+            not any(c in line for c in ['@', ':', '|', '/', '.com', 'http']) and
+            not any(kw in line.lower() for kw in ['resume', 'curriculum', 'cv', 'profile'])):
+            return line
     return lines[0] if lines else "Unknown"
 
 def extract_skills_from_text(text: str) -> list[str]:
@@ -255,9 +237,9 @@ async def extract_text(file: UploadFile = File(...)):
             text = content.decode("utf-8", errors="ignore")
         else:
             raise HTTPException(status_code=400, detail="Unsupported file type. Use PDF, DOCX, or TXT.")
-        print(f"Total extracted: {len(text)} characters")
+        print(f"Extracted {len(text)} characters")
         if not text.strip():
-            raise HTTPException(status_code=422, detail="Could not extract text. PDF may be image-based.")
+            raise HTTPException(status_code=422, detail="Could not extract text. File may be scanned/image-based. Please paste text manually.")
         return {"text": text, "filename": file.filename, "char_count": len(text)}
     except HTTPException:
         raise
